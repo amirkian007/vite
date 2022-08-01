@@ -120,6 +120,7 @@ function viteLegacyPlugin(options: Options = {}): Plugin[] {
   let config: ResolvedConfig
   const targets = options.targets || 'defaults'
   const genLegacy = options.renderLegacyChunks !== false
+  const noModule = !!options.noModule
   const genDynamicFallback = genLegacy
 
   const debugFlags = (process.env.DEBUG || '').split(',')
@@ -132,7 +133,7 @@ function viteLegacyPlugin(options: Options = {}): Plugin[] {
   const modernPolyfills = new Set<string>()
   const legacyPolyfills = new Set<string>()
 
-  if (Array.isArray(options.modernPolyfills)) {
+  if (Array.isArray(options.modernPolyfills) && !noModule) {
     options.modernPolyfills.forEach((i) => {
       modernPolyfills.add(
         i.includes('/') ? `core-js/${i}` : `core-js/modules/${i}.js`
@@ -158,7 +159,7 @@ function viteLegacyPlugin(options: Options = {}): Plugin[] {
 
   const legacyConfigPlugin: Plugin = {
     name: 'vite:legacy-config',
-
+    
     apply: 'build',
     config(config) {
       if (!config.build) {
@@ -186,6 +187,16 @@ function viteLegacyPlugin(options: Options = {}): Plugin[] {
       }
 
       if (!isLegacyBundle(bundle, opts)) {
+        if(noModule){
+          for (const name in bundle) {
+            //delete modern chunks in bundle
+            //this will cuse a html file with no entries
+            if ((bundle[name].type === 'chunk')&&(/\.js$/.test(bundle[name].fileName))) {
+                console.log("delete : ",bundle[name].fileName)
+                delete bundle[name]
+            }
+          }
+        }
         if (!modernPolyfills.size) {
           return
         }
@@ -307,11 +318,13 @@ function viteLegacyPlugin(options: Options = {}): Plugin[] {
       if (config.build.ssr) {
         return null
       }
+      
 
       if (!isLegacyChunk(chunk, opts)) {
         if (
           options.modernPolyfills &&
-          !Array.isArray(options.modernPolyfills)
+          !Array.isArray(options.modernPolyfills) &&
+          !noModule
         ) {
           // analyze and record modern polyfills
           await detectPolyfills(raw, { esmodules: true }, modernPolyfills)
@@ -404,7 +417,7 @@ function viteLegacyPlugin(options: Options = {}): Plugin[] {
       if (code) return { code, map }
       return null
     },
-
+    
     transformIndexHtml(html, { chunk }) {
       if (config.build.ssr) return
       if (!chunk) return
@@ -413,6 +426,8 @@ function viteLegacyPlugin(options: Options = {}): Plugin[] {
         // emitted. Here we simply record its corresponding legacy chunk.
         facadeToLegacyChunkMap.set(chunk.facadeModuleId, chunk.fileName)
         return
+      } else if (noModule) {
+        html = html.replace(/<script type="module".*?<\/script>/g, '')
       }
 
       const tags: HtmlTagDescriptor[] = []
@@ -423,7 +438,7 @@ function viteLegacyPlugin(options: Options = {}): Plugin[] {
         chunk.facadeModuleId
       )
 
-      if (modernPolyfillFilename) {
+      if (modernPolyfillFilename && !noModule) {
         tags.push({
           tag: 'script',
           attrs: {
@@ -449,7 +464,7 @@ function viteLegacyPlugin(options: Options = {}): Plugin[] {
       // 2. inject Safari 10 nomodule fix
       tags.push({
         tag: 'script',
-        attrs: { nomodule: true },
+        attrs: { nomodule: !noModule },
         children: safari10NoModuleFix,
         injectTo: 'body'
       })
@@ -462,7 +477,7 @@ function viteLegacyPlugin(options: Options = {}): Plugin[] {
         tags.push({
           tag: 'script',
           attrs: {
-            nomodule: true,
+            nomodule: !noModule,
             crossorigin: true,
             id: legacyPolyfillId,
             src: toAssetPathFromHtml(
@@ -488,7 +503,7 @@ function viteLegacyPlugin(options: Options = {}): Plugin[] {
         tags.push({
           tag: 'script',
           attrs: {
-            nomodule: true,
+            nomodule: !noModule,
             crossorigin: true,
             // we set the entry path on the element as an attribute so that the
             // script content will stay consistent - which allows using a constant
@@ -510,7 +525,12 @@ function viteLegacyPlugin(options: Options = {}): Plugin[] {
       }
 
       // 5. inject dynamic import fallback entry
-      if (genDynamicFallback && legacyPolyfillFilename && legacyEntryFilename) {
+      if (
+        genDynamicFallback &&
+        legacyPolyfillFilename &&
+        legacyEntryFilename &&
+        !noModule
+      ) {
         tags.push({
           tag: 'script',
           attrs: { type: 'module' },
@@ -544,6 +564,14 @@ function viteLegacyPlugin(options: Options = {}): Plugin[] {
           }
         }
       }
+      //  else if (noModule) {
+      //   // delete modern chunks if noModule is enabled
+      //   for (const name in bundle) {
+      //     if (bundle[name].type === 'chunk') {
+      //       delete bundle[name]
+      //     }
+      //   }
+      // }
     }
   }
 
